@@ -1,0 +1,5 @@
+# For 512x512x3 float32 tiles (3MB each):
+page_size_mb = 64  # Fits ~21 tiles per page
+
+# For 1024x1024x3 float64 tiles (24MB each):
+page_size_mb = 128  # Fits 5 tiles per page

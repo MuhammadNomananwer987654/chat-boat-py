@@ -1,0 +1,178 @@
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+import numpy as np
+import bisect
+
+@dataclass 
+class Segment:
+    """Memory segment for a COAD processing task with its own page table"""
+    id: int
+    base: int                    # Virtual base address
+    limit: int                   # Segment size (bytes)
+    page_table: Dict[int, int]   # VPN -> PPN mapping
+    access_count: int = 0        # For LRU eviction
+    present_pages: set = None    # Track resident pages
+
+@dataclass
+class PhysicalFrame:
+    """Physical memory frame"""
+    id: int
+    segment_id: Optional[int] = None
+    vpn: Optional[int] = None    # Virtual Page Number
+    dirty: bool = False
+
+class SegmentPagingMemory:
+    def __init__(self, 
+                 total_memory_mb: int = 16384,  # 16GB
+                 page_size_mb: int = 64,       # 64MB pages
+                 max_segments: int = 8):
+        """
+        Hybrid memory system with per-segment page tables
+        
+        Args:
+            total_memory_mb: Total physical memory
+            page_size_mb: Uniform page size (optimized for WSIs)
+            max_segments: Maximum concurrent segments
+        """
+        self.page_size = page_size_mb * 1024 * 1024
+        self.total_frames = total_memory_mb // page_size_mb
+        self.max_segments = max_segments
+        
+        # Memory structures
+        self.segments: Dict[int, Segment] = {}
+        self.frames = [PhysicalFrame(i) for i in range(self.total_frames)]
+        self.free_frames = list(range(self.total_frames))
+        
+        # Statistics
+        self.page_faults = 0
+        self.segment_swaps = 0
+
+    def create_segment(self, 
+                      segment_id: int, 
+                      size_mb: int) -> bool:
+        """Create a new segment with its own page table"""
+        if segment_id in self.segments:
+            return False
+            
+        if len(self.segments) >= self.max_segments:
+            self._evict_segment()
+            
+        num_pages = math.ceil(size_mb / self.page_size)
+        self.segments[segment_id] = Segment(
+            id=segment_id,
+            base=segment_id << 28,  # 256MB aligned segments
+            limit=size_mb * 1024 * 1024,
+            page_table={},
+            present_pages=set()
+        )
+        return True
+
+    def access(self, 
+               segment_id: int, 
+               virtual_address: int) -> Optional[int]:
+        """Translate virtual address to physical address"""
+        if segment_id not in self.segments:
+            return None
+            
+        segment = self.segments[segment_id]
+        segment.access_count += 1
+        
+        # Calculate VPN and offset
+        vpn = (virtual_address - segment.base) // self.page_size
+        offset = (virtual_address - segment.base) % self.page_size
+        
+        # Handle page fault if needed
+        if vpn not in segment.present_pages:
+            self._handle_page_fault(segment, vpn)
+            self.page_faults += 1
+            
+        if vpn in segment.page_table:
+            pfn = segment.page_table[vpn]
+            return pfn * self.page_size + offset
+        return None
+
+    def _handle_page_fault(self, 
+                         segment: Segment, 
+                         vpn: int):
+        """Load a page into physical memory"""
+        if not self.free_frames:
+            self._evict_page()
+            
+        # Allocate frame
+        pfn = self.free_frames.pop()
+        self.frames[pfn].segment_id = segment.id
+        self.frames[pfn].vpn = vpn
+        
+        # Update segment page table
+        segment.page_table[vpn] = pfn
+        segment.present_pages.add(vpn)
+
+    def _evict_segment(self):
+        """LRU segment eviction"""
+        lru_segment = min(self.segments.values(), 
+                         key=lambda s: s.access_count)
+        self._free_segment(lru_segment.id)
+        self.segment_swaps += 1
+
+    def _evict_page(self):
+        """Evict a page using clock algorithm"""
+        for frame in self.frames:
+            if frame.segment_id is not None:
+                segment = self.segments[frame.segment_id]
+                if frame.vpn in segment.present_pages:
+                    segment.present_pages.remove(frame.vpn)
+                    del segment.page_table[frame.vpn]
+                    self.free_frames.append(frame.id)
+                    frame.segment_id = None
+                    frame.vpn = None
+                    return
+
+    def _free_segment(self, segment_id: int):
+        """Release all frames used by a segment"""
+        segment = self.segments[segment_id]
+        for vpn in list(segment.present_pages):
+            pfn = segment.page_table[vpn]
+            self.frames[pfn].segment_id = None
+            self.frames[pfn].vpn = None
+            self.free_frames.append(pfn)
+        del self.segments[segment_id]
+
+    def get_memory_map(self) -> Dict[int, List[Tuple[int, int]]]:
+        """Generate a physical memory map"""
+        return {
+            frame.id: (frame.segment_id, frame.vpn)
+            for frame in self.frames 
+            if frame.segment_id is not None
+        }
+
+# Example COAD Processing Workflow
+if __name__ == "__main__":
+    # Initialize with parameters optimized for pathology imaging
+    mem = SegmentPagingMemory(
+        total_memory_mb=32768,  # 32GB system
+        page_size_mb=128,      # 128MB pages (for 512x512x3 float64 tiles)
+        max_segments=6         # Concurrent processing stages
+    )
+    
+    # Create segments for pipeline stages
+    mem.create_segment(1, 4096)  # 4GB for slide loading
+    mem.create_segment(2, 2048)  # 2GB for feature extraction
+    mem.create_segment(3, 1024)  # 1GB for classification
+    
+    # Simulate memory access pattern
+    print("Simulating WSI processing...")
+    for i in range(0, 3000000000, 100000000):  # 3GB range
+        phys_addr = mem.access(1, 0x10000000 + i)  # Segment 1 base + offset
+        if phys_addr is None:
+            print(f"Page fault at virtual address {0x10000000 + i:x}")
+    
+    print("\nMemory Statistics:")
+    print(f"Page faults: {mem.page_faults}")
+    print(f"Segment swaps: {mem.segment_swaps}")
+    print(f"Active segments: {len(mem.segments)}")
+    
+    # Display physical memory allocation
+    print("\nPhysical Memory Map:")
+    for pfn, (seg_id, vpn) in mem.get_memory_map().items():
+        print(f"Frame {pfn}: Segment {seg_id}, VPN {vpn}")

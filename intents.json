@@ -1,0 +1,78 @@
+{
+    "intents": [
+      {
+        "tag": "greeting",
+        "patterns": [
+          "Hi",
+          "Hey",
+          "Hello",
+          "Good morning",
+          "Good afternoon",
+          "Good evening"
+        ],
+        "responses": [
+          "Hello! How can I help you?",
+          "Hi there! What can I do for you?",
+          "Greetings! How may I assist you today?"
+        ]
+      },
+      {
+        "tag": "goodbye",
+        "patterns": [
+          "Bye",
+          "Goodbye",
+          "See you later",
+          "Quit",
+          "Exit"
+        ],
+        "responses": [
+          "Goodbye! Have a nice day!",
+          "See you later!",
+          "Bye! Come back soon."
+        ]
+      },
+      {
+        "tag": "thanks",
+        "patterns": [
+          "Thanks",
+          "Thank you",
+          "Thanks a lot",
+          "Appreciate it"
+        ],
+        "responses": [
+          "You're welcome!",
+          "Happy to help!",
+          "Anytime!"
+        ]
+      },
+      {
+        "tag": "name",
+        "patterns": [
+          "What's your name?",
+          "Who are you?",
+          "What do they call you?"
+        ],
+        "responses": [
+          "I'm ChatBot!",
+          "You can call me ChatBot.",
+          "I'm your friendly neighborhood ChatBot."
+        ]
+      },
+      {
+        "tag": "help",
+        "patterns": [
+          "Help",
+          "What can you do?",
+          "How can you help me?",
+          "What are your capabilities?"
+        ],
+        "responses": [
+          "I can chat with you about general topics.",
+          "I can respond to greetings, answer questions about myself, and more!",
+          "Try asking me about my name or just say hello!"
+        ]
+      }
+    ]
+  }
+
+

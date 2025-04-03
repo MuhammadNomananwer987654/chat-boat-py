@@ -1,0 +1,193 @@
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+import numpy as np
+import psutil
+
+@dataclass
+class Segment:
+    """Memory segment for a COAD processing task"""
+    id: int
+    base: int  # Base address
+    limit: int  # Segment size
+    access: int = 0  # Usage counter for LRU
+
+@dataclass
+class Page:
+    """Page within a segment"""
+    id: int
+    segment_id: int
+    present: bool = False
+    modified: bool = False
+    frame: Optional[int] = None  # Physical frame if present
+
+class HybridMemoryManager:
+    def __init__(self, 
+                 total_memory_mb: int = 8192,
+                 max_segments: int = 16,
+                 page_size_mb: int = 64):
+        """
+        Hybrid segmentation-paging memory manager for COAD WSIs
+        
+        Args:
+            total_memory_mb: Total available memory (default 8GB)
+            max_segments: Maximum concurrent segments (default 16)
+            page_size_mb: Page size in MB (default 64MB)
+        """
+        self.total_memory = total_memory_mb * 1024 * 1024
+        self.page_size = page_size_mb * 1024 * 1024
+        self.max_segments = max_segments
+        
+        # Memory structures
+        self.segments: Dict[int, Segment] = {}
+        self.page_table: Dict[int, Page] = {}  # page_id → Page
+        self.free_frames = math.ceil(self.total_memory / self.page_size)
+        self.used_frames = 0
+        
+        # Statistics
+        self.page_faults = 0
+        self.segment_faults = 0
+    
+    def create_segment(self, segment_id: int, size_mb: int) -> bool:
+        """Create a new memory segment for a WSI processing task"""
+        if len(self.segments) >= self.max_segments:
+            self._evict_segment()
+            self.segment_faults += 1
+            
+        size_bytes = size_mb * 1024 * 1024
+        num_pages = math.ceil(size_bytes / self.page_size)
+        
+        # Register segment
+        self.segments[segment_id] = Segment(
+            id=segment_id,
+            base=0,  # Virtual addressing
+            limit=size_bytes
+        )
+        
+        # Initialize page table entries
+        for page_num in range(num_pages):
+            page_id = (segment_id << 16) | page_num
+            self.page_table[page_id] = Page(
+                id=page_id,
+                segment_id=segment_id
+            )
+        
+        return True
+    
+    def access_memory(self, segment_id: int, offset: int) -> Optional[int]:
+        """
+        Access memory in a segment (simulated)
+        
+        Args:
+            segment_id: ID of the segment to access
+            offset: Byte offset within segment
+            
+        Returns:
+            Physical address if successful, None if fault
+        """
+        if segment_id not in self.segments:
+            return None
+            
+        segment = self.segments[segment_id]
+        segment.access += 1  # Track usage
+        
+        # Check bounds
+        if offset >= segment.limit:
+            return None
+            
+        # Calculate page info
+        page_num = offset // self.page_size
+        page_id = (segment_id << 16) | page_num
+        page_offset = offset % self.page_size
+        
+        # Handle page
+        if page_id not in self.page_table:
+            return None
+            
+        page = self.page_table[page_id]
+        
+        if not page.present:
+            self._handle_page_fault(page)
+            self.page_faults += 1
+            
+        if page.present:
+            # Simulate physical address
+            return (page.frame * self.page_size) + page_offset
+        return None
+    
+    def _handle_page_fault(self, page: Page):
+        """Load a page into memory"""
+        if self.used_frames >= self.free_frames:
+            self._evict_page()
+            
+        # Allocate frame (simplified)
+        page.frame = self.used_frames
+        page.present = True
+        self.used_frames += 1
+    
+    def _evict_segment(self):
+        """Evict least recently used segment"""
+        lru_segment = min(self.segments.values(), key=lambda s: s.access)
+        self._free_segment(lru_segment.id)
+    
+    def _evict_page(self):
+        """Evict least recently used page (simplified)"""
+        # In real implementation, track page access times
+        for page in self.page_table.values():
+            if page.present:
+                page.present = False
+                page.modified = False
+                self.used_frames -= 1
+                return
+    
+    def _free_segment(self, segment_id: int):
+        """Free all pages belonging to a segment"""
+        pages_to_free = [
+            p.id for p in self.page_table.values() 
+            if p.segment_id == segment_id and p.present
+        ]
+        
+        for page_id in pages_to_free:
+            self.page_table[page_id].present = False
+            self.used_frames -= 1
+            
+        del self.segments[segment_id]
+    
+    def memory_status(self) -> str:
+        """Get current memory usage statistics"""
+        mb_used = (self.used_frames * self.page_size) / (1024 * 1024)
+        total_mb = self.total_memory / (1024 * 1024)
+        return (f"Memory: {mb_used:.1f}/{total_mb:.1f} MB used | "
+                f"Segments: {len(self.segments)}/{self.max_segments} | "
+                f"Page faults: {self.page_faults}")
+
+# Example usage for COAD processing
+if __name__ == "__main__":
+    # Initialize with 16GB memory, 8 segments, 128MB pages
+    mem = HybridMemoryManager(
+        total_memory_mb=16384,
+        max_segments=8,
+        page_size_mb=128
+    )
+    
+    # Simulate WSI processing workflow
+    print("Starting COAD analysis pipeline...")
+    
+    # Create segments for different processing tasks
+    mem.create_segment(1, 2048)  # 2GB for slide loading
+    mem.create_segment(2, 1024)  # 1GB for feature extraction
+    mem.create_segment(3, 512)   # 512MB for classification
+    
+    # Simulate memory access patterns
+    print("\nSimulating memory accesses...")
+    for i in range(0, 2500000000, 50000000):  # 2.5GB range
+        addr = mem.access_memory(1, i)  # Access slide segment
+        if addr is None:
+            print(f"Page fault at offset {i}")
+    
+    # Add another segment (will trigger eviction)
+    print("\nAdding tumor detection segment...")
+    mem.create_segment(4, 3072)  # 3GB
+    
+    print("\nFinal memory status:")
+    print(mem.memory_status())

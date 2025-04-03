@@ -1,0 +1,71 @@
+class PageTable:
+    def __init__(self, num_pages):
+        self.page_table = {}  # Maps virtual page to physical frame
+        self.num_pages = num_pages
+    
+    def map_page(self, virtual_page, physical_frame):
+        self.page_table[virtual_page] = physical_frame
+    
+    def translate(self, virtual_address, page_size):
+        page_num = virtual_address // page_size
+        offset = virtual_address % page_size
+        if page_num in self.page_table:
+            physical_frame = self.page_table[page_num]
+            return (physical_frame * page_size) + offset
+        else:
+            return None  # Page fault
+
+class PagingMemoryManager:
+    def __init__(self, total_memory, page_size):
+        self.total_memory = total_memory
+        self.page_size = page_size
+        self.num_frames = total_memory // page_size
+        self.physical_memory = [None] * self.num_frames  # None = free, else (process_id, page_num)
+        self.page_tables = {}  # process_id -> PageTable
+    
+    def allocate(self, process_id, pages_needed):
+        if pages_needed > self.num_frames:
+            return False
+        
+        free_frames = [i for i, frame in enumerate(self.physical_memory) if frame is None]
+        if len(free_frames) < pages_needed:
+            return False  # Not enough memory
+        
+        page_table = PageTable(pages_needed)
+        self.page_tables[process_id] = page_table
+        
+        for i in range(pages_needed):
+            frame = free_frames[i]
+            self.physical_memory[frame] = (process_id, i)
+            page_table.map_page(i, frame)
+        
+        return True
+    
+    def deallocate(self, process_id):
+        if process_id not in self.page_tables:
+            return False
+        
+        # Free all frames used by this process
+        for frame, (pid, _) in enumerate(self.physical_memory):
+            if pid == process_id:
+                self.physical_memory[frame] = None
+        
+        del self.page_tables[process_id]
+        return True
+    
+    def translate_address(self, process_id, virtual_address):
+        if process_id not in self.page_tables:
+            return None
+        return self.page_tables[process_id].translate(virtual_address, self.page_size)
+
+# Example Usage
+if __name__ == "__main__":
+    pm = PagingMemoryManager(total_memory=1024, page_size=64)  # 1KB memory, 64B pages
+    
+    pm.allocate("P1", 4)  # Allocate 4 pages (256B) to P1
+    pm.allocate("P2", 8)  # Allocate 8 pages (512B) to P2
+    
+    # Simulate address translation
+    virtual_addr = 128  # Example virtual address
+    physical_addr = pm.translate_address("P1", virtual_addr)
+    print(f"Virtual Address {virtual_addr} → Physical Address {physical_addr}")
